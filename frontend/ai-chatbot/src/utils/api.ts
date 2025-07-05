@@ -18,7 +18,11 @@ interface ChatResponse {
   sources: Source[];
 }
 
+/*
 const API_BASE_URL = "http://localhost:8000";
+*/
+
+const API_BASE_URL = "https://hyuchatbot-production.up.railway.app";
 
 export const chatAPI = {
   /**
