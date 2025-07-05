@@ -16,7 +16,7 @@ from difflib import SequenceMatcher
 from contextlib import asynccontextmanager
 
 # LangChain imports (최신 버전으로 업데이트)
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
