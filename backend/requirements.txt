@@ -5,20 +5,16 @@ python-multipart==0.0.6
 python-dotenv==1.0.0
 requests==2.31.0
 
-# LangChain 관련 (호환 가능한 버전)
-langchain>=0.2.14
-langchain-community>=0.2.12
-langchain-core>=0.2.32
+# LangChain 필수 패키지만
 langchain-openai>=0.1.17
-langchain-chroma>=0.1.2
+langchain-core>=0.2.32
+langchain-community>=0.2.12
 
-# 벡터 데이터베이스
+# 벡터 데이터베이스 (최소 설치)
 chromadb>=0.5.0
 
-# 검색 및 임베딩
-sentence-transformers>=2.7.0
+# 검색 관련 (가벼운 패키지)
 rank-bm25>=0.2.2
 
-# 기타
-numpy>=1.26.0
+# 기타 필수
 openai>=1.35.0 
