@@ -5,10 +5,10 @@ python-multipart==0.0.6
 python-dotenv==1.0.0
 requests==2.31.0
 
-# LangChain 관련 (최신 버전으로 업데이트)
+# LangChain 관련 (호환 가능한 버전으로 업데이트)
 langchain==0.2.14
 langchain-community==0.2.12
-langchain-core==0.2.23
+langchain-core>=0.2.32
 langchain-openai==0.1.17
 langchain-chroma==0.1.2
 
