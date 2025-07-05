@@ -12,14 +12,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from difflib import SequenceMatcher
+from contextlib import asynccontextmanager
 
-# LangChain imports (최신 버전에 맞게 수정)
-from langchain_community.vectorstores import Chroma
+# LangChain imports (최신 버전으로 업데이트)
+from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
@@ -198,11 +198,26 @@ def get_final_response(original_query: str):
     except Exception as e:
         return f"답변 생성 중 오류 발생: {e}", []
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 시작/종료 시 실행되는 이벤트 핸들러"""
+    # 시작 시
+    print("🚀 한양대학교 AI 챗봇 서버를 시작합니다...")
+    success = initialize_search_system()
+    if not success:
+        print("❌ 검색 시스템 초기화 실패")
+    
+    yield
+    
+    # 종료 시 (필요한 경우 정리 작업)
+    print("🔄 서버를 종료합니다...")
+
 # FastAPI 앱 생성
 app = FastAPI(
     title="한양대학교 AI 챗봇 (GitHub 기반)",
     description="GitHub 저장소 기반의 한양대학교 정보 제공 AI 챗봇",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # CORS 설정
@@ -216,14 +231,6 @@ app.add_middleware(
 
 # 대화 기록 저장
 conversations = {}
-
-@app.on_event("startup")
-async def startup_event():
-    """서버 시작 시 검색 시스템을 초기화합니다."""
-    print("🚀 한양대학교 AI 챗봇 서버를 시작합니다...")
-    success = initialize_search_system()
-    if not success:
-        print("❌ 검색 시스템 초기화 실패")
 
 @app.get("/")
 async def root():
