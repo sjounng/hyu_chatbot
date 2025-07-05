@@ -2,7 +2,7 @@
 
 한양대학교 관련 정보를 제공하는 AI 챗봇입니다. FastAPI 백엔드와 Next.js 프론트엔드로 구성되어 있습니다.
 
-## 🚀 주요 기능
+## 주요 기능
 
 - **RAG (Retrieval-Augmented Generation) 시스템**: 한양대학교 관련 문서를 기반으로 한 정확한 정보 제공
 - **실시간 채팅**: 사용자와의 자연스러운 대화
@@ -10,7 +10,7 @@
 - **타이핑 애니메이션**: AI 응답을 타이핑하는 효과
 - **반응형 디자인**: 모바일과 데스크톱에서 모두 사용 가능
 
-## 🛠️ 기술 스택
+## 기술 스택
 
 ### 백엔드
 
@@ -34,11 +34,17 @@ hyu_chatbot/
 ├── backend/                 # FastAPI 백엔드
 │   ├── main.py             # 메인 서버 파일
 │   ├── requirements.txt     # Python 의존성
+│   ├── .env                # 환경 변수 (생성 필요)
+│   ├── .env.example        # 환경 변수 예시
 │   ├── api/                # API 라우터
 │   ├── models/             # 데이터 모델
 │   ├── services/           # 비즈니스 로직
 │   ├── utils/              # 유틸리티 함수
-│   └── github_backend/     # 데이터 파일들
+│   └── data/               # 데이터 파일들
+│       ├── chroma_db_hyu/  # 벡터 데이터베이스
+│       ├── bm25_index.pkl  # BM25 인덱스
+│       ├── document.json   # 문서 데이터
+│       └── question_sample.json # 질문-답변 샘플
 ├── frontend/               # Next.js 프론트엔드
 │   └── ai-chatbot/        # 채팅 애플리케이션
 │       └── src/
@@ -52,7 +58,7 @@ hyu_chatbot/
 └── README.md              # 프로젝트 설명
 ```
 
-## 🚀 설치 및 실행
+## 설치 및 실행
 
 ### 1. 저장소 클론
 
@@ -73,8 +79,19 @@ pip install -r requirements.txt
 ### 3. 환경 변수 설정
 
 ```bash
-# backend/.env 파일 생성
-OPENAI_API_KEY=your_openai_api_key_here
+# backend/.env 파일 생성 (실제 API 키로 교체하세요)
+cp .env.example .env
+# .env 파일을 편집하여 실제 OpenAI API 키를 입력하세요
+```
+
+`.env` 파일 내용:
+
+```env
+OPENAI_API_KEY=실제_OpenAI_API_키를_여기에_입력하세요
+DATA_DIR=./data
+HOST=0.0.0.0
+PORT=8000
+LOG_LEVEL=INFO
 ```
 
 ### 4. 백엔드 실행
@@ -98,7 +115,7 @@ npm run dev
 # 애플리케이션이 http://localhost:3000 에서 실행됩니다
 ```
 
-## 🎯 사용 방법
+## 사용 방법
 
 1. 브라우저에서 `http://localhost:3000` 접속
 2. 한양대학교 관련 질문 입력
@@ -119,13 +136,13 @@ npm run dev
 - **타이핑 중지**: 현재까지 타이핑된 부분까지만 표시
 - **자연스러운 중단**: 사용자가 원하는 시점에 중단 가능
 
-## 📝 API 엔드포인트
+## API 엔드포인트
 
 - `POST /api/v1/chat/`: 채팅 메시지 처리
 - `GET /health`: 서버 상태 확인
 - `GET /`: 루트 엔드포인트
 
-## 🤝 기여하기
+## 기여하기
 
 1. Fork the Project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
@@ -133,14 +150,14 @@ npm run dev
 4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📄 라이선스
+## 라이선스
 
 이 프로젝트는 MIT 라이선스 하에 배포됩니다.
 
-## 👥 팀원
+## 팀원
 
 - 한양대학교 AI 챗봇 개발팀
 
-## 📞 문의
+## 문의
 
 프로젝트에 대한 문의사항이 있으시면 이슈를 생성해주세요.

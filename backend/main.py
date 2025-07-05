@@ -2,6 +2,7 @@ import os
 import json
 import pickle
 import random
+import logging
 from collections import OrderedDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -21,14 +22,34 @@ from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 
+# 환경 변수 로드
 load_dotenv()
+
+# 로깅 설정
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('app.log', encoding='utf-8')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# API 키 및 설정
 api_key = os.getenv("OPENAI_API_KEY")
 
 # --- 설정 및 문서 로딩 ---
-VECTOR_DB_PATH = "./github_backend/chroma_db_hyu"
-BM25_INDEX_PATH = "./github_backend/bm25_index.pkl"
-DOC_FILE_PATH = "./github_backend/document.json"
-QA_FILE_PATH = "./github_backend/question_sample.json"
+DATA_DIR = os.getenv("DATA_DIR", "./data")
+VECTOR_DB_PATH = os.path.join(DATA_DIR, "chroma_db_hyu")
+BM25_INDEX_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
+DOC_FILE_PATH = os.path.join(DATA_DIR, "document.json")
+QA_FILE_PATH = os.path.join(DATA_DIR, "question_sample.json")
+
+# OpenAI API 키 검증
+if not api_key:
+    raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
 
 # 전역 변수로 검색 시스템 초기화
 embedding_model = None
@@ -43,7 +64,7 @@ def initialize_search_system():
     """검색 시스템을 초기화합니다."""
     global embedding_model, vector_retriever, bm25_retriever, hybrid_retriever, title_to_doc_map, all_titles, qa_samples
     
-    print("1. 검색 시스템 및 전체 문서 데이터를 로드합니다...")
+    logger.info("1. 검색 시스템 및 전체 문서 데이터를 로드합니다...")
     
     try:
         embedding_model = OpenAIEmbeddings(openai_api_key=api_key)
@@ -72,11 +93,11 @@ def initialize_search_system():
         with open(QA_FILE_PATH, "r", encoding="utf-8") as f:
             qa_samples = json.load(f)
         
-        print("   -> 로드 완료!")
+        logger.info("   -> 로드 완료!")
         return True
         
     except Exception as e:
-        print(f"   -> 로드 실패: {e}")
+        logger.error(f"   -> 로드 실패: {e}")
         return False
 
 # Pydantic 모델
@@ -93,7 +114,7 @@ class ChatResponse(BaseModel):
 # RAG 답변 생성 함수
 def get_final_response(original_query: str):
     """GitHub 저장소의 RAG 로직을 사용하여 답변을 생성합니다."""
-    print("\n[단계 1: AI를 이용한 프롬프트 재구성]")
+    logger.info("\n[단계 1: AI를 이용한 프롬프트 재구성]")
 
     REWRITE_PROMPT = """[지시]
 당신은 사용자의 질문 의도를 파악하여, 정보 검색에 더 적합한 명확하고 상세한 질문으로 재구성하는 전문가입니다.
@@ -108,14 +129,14 @@ def get_final_response(original_query: str):
     try:
         formatted_prompt = REWRITE_PROMPT.format(user_query=original_query)
         rewritten_query = llm.invoke(formatted_prompt).content.strip()
-        print(f"   -> 원본 질문: '{original_query}'")
-        print(f"   -> AI가 재구성한 질문: '{rewritten_query}'")
+        logger.info(f"   -> 원본 질문: '{original_query}'")
+        logger.info(f"   -> AI가 재구성한 질문: '{rewritten_query}'")
     except Exception as e:
-        print(f"   -> 프롬프트 재구성 실패: {e}. 원본 질문으로 계속 진행합니다.")
+        logger.warning(f"   -> 프롬프트 재구성 실패: {e}. 원본 질문으로 계속 진행합니다.")
         rewritten_query = original_query
 
     # --- 재구성된 질문 기반 검색 ---
-    print("\n[단계 2: 확정적 Title 검색 시작]")
+    logger.info("\n[단계 2: 확정적 Title 검색 시작]")
 
     def is_title_similar(query: str, title: str, threshold: float = 0.85) -> bool:
         return SequenceMatcher(None, query, title).ratio() >= threshold
@@ -131,21 +152,21 @@ def get_final_response(original_query: str):
         ):
             golden_docs.append(title_to_doc_map[title])
     if golden_docs:
-        print(
+        logger.info(
             f"   -> '황금 티켓' 발견! Title 일치 문서: {[doc.metadata['title'] for doc in golden_docs]}"
         )
 
-    print("[단계 3: 보조 하이브리드 검색 시작]")
+    logger.info("[단계 3: 보조 하이브리드 검색 시작]")
     hybrid_docs = hybrid_retriever.invoke(rewritten_query)
     if not hybrid_docs:
-        print("   -> 하이브리드 검색 결과 없음, BM25 단독 검색 시도")
+        logger.info("   -> 하이브리드 검색 결과 없음, BM25 단독 검색 시도")
         try:
             hybrid_docs = bm25_retriever.invoke(rewritten_query)
         except Exception as e:
-            print(f"   -> BM25 fallback 실패: {e}")
+            logger.error(f"   -> BM25 fallback 실패: {e}")
             hybrid_docs = []
 
-    print("[단계 4: 결과 종합 및 정제]")
+    logger.info("[단계 4: 결과 종합 및 정제]")
     combined_docs_dict = OrderedDict()
     for doc in golden_docs:
         combined_docs_dict[doc.metadata["id"]] = doc
@@ -157,7 +178,7 @@ def get_final_response(original_query: str):
     if not final_retrieved_docs:
         return "관련 정보를 찾을 수 없습니다.", []
 
-    print(f"   -> 최종적으로 {len(final_retrieved_docs)}개의 관련 문서를 선별했습니다.")
+    logger.info(f"   -> 최종적으로 {len(final_retrieved_docs)}개의 관련 문서를 선별했습니다.")
 
     # 5. 최종 GPT 답변 생성
     context_str = "\n\n---\n\n".join(
@@ -191,7 +212,7 @@ def get_final_response(original_query: str):
 {rewritten_query}
 [답변]"""
 
-    print("\n[단계 5: 최종 답변 생성 시작]")
+    logger.info("\n[단계 5: 최종 답변 생성 시작]")
     try:
         answer = llm.invoke(rag_prompt).content.strip()
         return answer, source_info
@@ -202,15 +223,15 @@ def get_final_response(original_query: str):
 async def lifespan(app: FastAPI):
     """서버 시작/종료 시 실행되는 이벤트 핸들러"""
     # 시작 시
-    print("🚀 한양대학교 AI 챗봇 서버를 시작합니다...")
+    logger.info("한양대학교 AI 챗봇 서버를 시작합니다...")
     success = initialize_search_system()
     if not success:
-        print("❌ 검색 시스템 초기화 실패")
+        logger.error("❌ 검색 시스템 초기화 실패")
     
     yield
     
     # 종료 시 (필요한 경우 정리 작업)
-    print("🔄 서버를 종료합니다...")
+    logger.info("🔄 서버를 종료합니다...")
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -245,10 +266,13 @@ async def root():
 async def chat(request: ChatRequest):
     """채팅 메시지를 처리합니다."""
     try:
+        logger.info(f"새로운 채팅 요청: {request.message[:50]}...")
         conversation_id = request.conversation_id or str(uuid.uuid4())
         
         # RAG 응답 생성
         answer, sources = get_final_response(request.message)
+        
+        logger.info(f"응답 생성 완료: {len(answer)} 문자, {len(sources)} 개 소스")
         
         return ChatResponse(
             response=answer,
@@ -258,10 +282,18 @@ async def chat(request: ChatRequest):
         )
         
     except Exception as e:
+        logger.error(f"채팅 처리 중 오류 발생: {str(e)}", exc_info=True)
+        
         # 요청이 취소된 경우
         if "cancelled" in str(e).lower() or "abort" in str(e).lower():
             raise HTTPException(status_code=499, detail="Client Closed Request")
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        # OpenAI API 관련 오류
+        if "openai" in str(e).lower() or "api" in str(e).lower():
+            raise HTTPException(status_code=503, detail="AI 서비스 일시 불가. 잠시 후 다시 시도해주세요.")
+        
+        # 일반적인 서버 오류
+        raise HTTPException(status_code=500, detail="서버 내부 오류가 발생했습니다.")
 
 @app.get("/health")
 async def health_check():
@@ -274,5 +306,7 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host=host, port=port)
     
