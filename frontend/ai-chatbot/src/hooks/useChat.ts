@@ -4,7 +4,7 @@ import { chatAPI } from "../utils/api";
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [conversationId, setConversationId] = useState<string | undefined>();
+  const [conversationId] = useState<string | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [abortController, setAbortController] =
     useState<AbortController | null>(null);
@@ -89,9 +89,11 @@ export function useChat() {
     }
 
     // cleanup 함수 호출
-    if ((window as any).__typingCleanup) {
-      (window as any).__typingCleanup();
-      (window as any).__typingCleanup = null;
+    const globalWindow = window as unknown as Record<string, unknown>;
+    if (globalWindow.__typingCleanup) {
+      const cleanup = globalWindow.__typingCleanup as () => void;
+      cleanup();
+      globalWindow.__typingCleanup = null;
     }
 
     setIsLoading(false);
@@ -147,7 +149,8 @@ export function useChat() {
       // 중지 시 cleanup 함수를 호출할 수 있도록 저장
       if (cleanup) {
         // cleanup 함수를 전역에서 접근할 수 있도록 저장
-        (window as any).__typingCleanup = cleanup;
+        const globalWindow = window as unknown as Record<string, unknown>;
+        globalWindow.__typingCleanup = cleanup;
       }
     }, 100);
   };

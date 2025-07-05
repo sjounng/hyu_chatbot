@@ -4,11 +4,18 @@ interface ChatRequest {
   conversation_id?: string;
 }
 
+interface Source {
+  id: string;
+  title: string;
+  content: string;
+  [key: string]: unknown;
+}
+
 interface ChatResponse {
   response: string;
   conversation_id: string;
   timestamp: string;
-  sources: any[];
+  sources: Source[];
 }
 
 const API_BASE_URL = "http://localhost:8000";

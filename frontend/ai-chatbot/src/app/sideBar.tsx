@@ -18,7 +18,7 @@ interface SideBarProps {
 
 export default function SideBar({ children, onSidebarToggle }: SideBarProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [chatHistory, setChatHistory] = useState<ChatHistory[]>([
+  const chatHistory: ChatHistory[] = [
     {
       id: "1",
       title: "파이썬으로 웹 스크래핑하는 방법",
@@ -26,7 +26,7 @@ export default function SideBar({ children, onSidebarToggle }: SideBarProps) {
     },
     { id: "2", title: "React 컴포넌트 최적화", timestamp: new Date() },
     { id: "3", title: "데이터베이스 설계 원칙", timestamp: new Date() },
-  ]);
+  ];
 
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat("ko-KR", {
