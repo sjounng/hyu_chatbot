@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-rgb: 255, 255, 255;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: rgb(var(--background-rgb));
+}
+
+/* 생각하는 애니메이션 */
+.thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #6b7280;
+  animation: thinking 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes thinking {
+  0%,
+  60%,
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+    background-color: #9ca3af;
+  }
+  30% {
+    transform: scale(1.2);
+    opacity: 1;
+    background-color: #4b5563;
+  }
+}
+
+/* 더 부드러운 생각하는 애니메이션 */
+.thinking-dots-smooth {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.thinking-dot-smooth {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #6b7280;
+  animation: thinking-smooth 1.6s ease-in-out infinite;
+}
+
+.thinking-dot-smooth:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.thinking-dot-smooth:nth-child(2) {
+  animation-delay: 0.3s;
+}
+
+.thinking-dot-smooth:nth-child(3) {
+  animation-delay: 0.6s;
+}
+
+@keyframes thinking-smooth {
+  0%,
+  70%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.2;
+    background-color: #d1d5db;
+  }
+  35% {
+    transform: scale(1);
+    opacity: 1;
+    background-color: #374151;
+  }
+}
+
+/* AI 응답 나타나는 애니메이션 */
+.ai-response-appear {
+  animation: aiResponseAppear 0.8s ease-out forwards;
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+@keyframes aiResponseAppear {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+  }
+  50% {
+    opacity: 0.7;
+    transform: translateY(5px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 타이핑 효과 */
+.typing-effect {
+  overflow: hidden;
+  border-right: 2px solid transparent;
+  animation: typing 2s steps(40, end), blink-caret 0.75s step-end infinite;
+  white-space: nowrap;
+}
+
+@keyframes typing {
+  from {
+    width: 0;
+  }
+  to {
+    width: 100%;
+  }
+}
+
+@keyframes blink-caret {
+  from,
+  to {
+    border-color: transparent;
+  }
+  50% {
+    border-color: #6b7280;
+  }
+}
+
+/* 부드러운 텍스트 나타남 */
+.text-reveal {
+  animation: textReveal 1.2s ease-out forwards;
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+@keyframes textReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 타이핑 커서 애니메이션 */
+.typing-cursor {
+  animation: blink 1s infinite;
+  color: #6b7280;
+  font-weight: bold;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 타이핑 효과 컨테이너 */
+.typing-effect {
+  display: inline-block;
+  position: relative;
+}
