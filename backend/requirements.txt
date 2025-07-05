@@ -1,24 +1,24 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-pydantic==2.5.0
+pydantic>=2.7.4
 python-multipart==0.0.6
 python-dotenv==1.0.0
 requests==2.31.0
 
-# LangChain 관련 (호환 가능한 버전으로 업데이트)
-langchain==0.2.14
-langchain-community==0.2.12
+# LangChain 관련 (호환 가능한 버전)
+langchain>=0.2.14
+langchain-community>=0.2.12
 langchain-core>=0.2.32
-langchain-openai==0.1.17
-langchain-chroma==0.1.2
+langchain-openai>=0.1.17
+langchain-chroma>=0.1.2
 
 # 벡터 데이터베이스
-chromadb==0.5.0
+chromadb>=0.5.0
 
 # 검색 및 임베딩
-sentence-transformers==2.7.0
-rank-bm25==0.2.2
+sentence-transformers>=2.7.0
+rank-bm25>=0.2.2
 
 # 기타
 numpy>=1.26.0
-openai==1.35.0 
+openai>=1.35.0 
