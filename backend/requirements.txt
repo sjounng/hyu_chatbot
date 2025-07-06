@@ -10,11 +10,15 @@ langchain-openai>=0.1.17
 langchain-core>=0.2.32
 langchain-community>=0.2.12
 
-# 벡터 데이터베이스 (최소 설치)
-chromadb>=0.5.0
+# 벡터 데이터베이스 (경량 설치)
+chromadb>=0.5.0,<1.1.0
 
 # 검색 관련 (가벼운 패키지)
 rank-bm25>=0.2.2
 
+# CrossEncoder를 위한 sentence-transformers (final.py와 동일)
+sentence-transformers>=2.2.0,<3.0.0
+
 # 기타 필수
-openai>=1.35.0 
+openai>=1.35.0
+

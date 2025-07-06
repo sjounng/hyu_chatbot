@@ -22,13 +22,20 @@ export function useChat() {
   }, [messages]);
 
   const typeText = (messageId: string, fullText: string) => {
+    // 안전한 텍스트 처리
+    const safeText = fullText && typeof fullText === "string" ? fullText : "";
+    if (!safeText) {
+      setIsLoading(false);
+      return;
+    }
+
     let currentIndex = 0;
     const interval = setInterval(() => {
-      if (currentIndex <= fullText.length) {
+      if (currentIndex <= safeText.length) {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === messageId
-              ? { ...msg, displayedText: fullText.slice(0, currentIndex) }
+              ? { ...msg, displayedText: safeText.slice(0, currentIndex) }
               : msg
           )
         );
@@ -38,7 +45,7 @@ export function useChat() {
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === messageId
-              ? { ...msg, isTypingResponse: false, displayedText: fullText }
+              ? { ...msg, isTypingResponse: false, displayedText: safeText }
               : msg
           )
         );
@@ -66,6 +73,11 @@ export function useChat() {
         conversationId,
         controller.signal
       );
+
+      // 응답 안전성 검사
+      if (!response || typeof response !== "string") {
+        return "죄송합니다. 서버에서 올바르지 않은 응답을 받았습니다.";
+      }
 
       return response;
     } catch (error) {
@@ -105,7 +117,7 @@ export function useChat() {
           ? {
               ...msg,
               isTypingResponse: false,
-              text: msg.displayedText || msg.text,
+              text: msg.displayedText || msg.text || "응답이 중단되었습니다.",
             }
           : msg
       )
@@ -156,15 +168,20 @@ export function useChat() {
   };
 
   const handleSendMessage = (question: string) => {
+    // 입력값 안전성 검사
+    if (!question || typeof question !== "string" || !question.trim()) {
+      return;
+    }
+
     const newMessage: ChatMessage = {
       id: Date.now().toString(),
-      text: question,
+      text: question.trim(),
       isUser: true,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, newMessage]);
 
-    simulateAIResponse(question);
+    simulateAIResponse(question.trim());
   };
 
   return {

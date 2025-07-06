@@ -1,0 +1,55 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+venv
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov/
+
+# Documentation
+*.md
+docs/
+
+# Railway/Docker
+Dockerfile
+.dockerignore
+railway.toml
+
+# 임시 파일
+temp.py
+final.py
+
+# 큰 벡터 DB만 제외 (BM25는 런타임 생성)
+data/chroma_db_hyu/ 

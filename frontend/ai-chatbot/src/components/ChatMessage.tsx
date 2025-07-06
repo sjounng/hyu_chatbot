@@ -8,6 +8,18 @@ interface ChatMessageProps {
 }
 
 export default function ChatMessage({ message, index }: ChatMessageProps) {
+  // 안전한 텍스트 렌더링을 위한 헬퍼 함수
+  const getSafeText = (text?: string): string => {
+    return text && typeof text === "string" ? text : "";
+  };
+
+  const getDisplayText = (): string => {
+    if (message.isTypingResponse) {
+      return getSafeText(message.displayedText);
+    }
+    return getSafeText(message.displayedText) || getSafeText(message.text);
+  };
+
   return (
     <div
       className={`flex w-full animate-in slide-in-from-bottom-2 duration-300 ease-out ${
@@ -34,21 +46,23 @@ export default function ChatMessage({ message, index }: ChatMessageProps) {
               <span>
                 {message.isTypingResponse ? (
                   <span>
-                    {message.displayedText}
-                    <span className="typing-cursor">|</span>
+                    {getDisplayText()}
+                    {getDisplayText() && (
+                      <span className="typing-cursor">|</span>
+                    )}
                   </span>
                 ) : (
-                  message.displayedText || message.text
+                  getDisplayText() || "메시지를 불러오는 중..."
                 )}
               </span>
             )}
           </div>
         </div>
         <p className="text-xs text-gray-500 mt-1 ml-2 animate-in fade-in duration-500 delay-200">
-          {message.timestamp.toLocaleTimeString("ko-KR", {
+          {message.timestamp?.toLocaleTimeString?.("ko-KR", {
             hour: "2-digit",
             minute: "2-digit",
-          })}
+          }) || ""}
         </p>
       </div>
     </div>
