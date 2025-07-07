@@ -223,8 +223,8 @@ def rerank_documents(query: str, documents: List[Document], top_k: int = 5) -> L
     
     if cross_encoder is not None:
         try:
-            # CrossEncoder의 최대 입력 길이 제한 (512 토큰 ≈ 2000자)
-            max_content_length = 2000
+            # CrossEncoder의 최대 입력 길이 제한 (512 토큰 ≈ 400자)
+            max_content_length = 400
             pairs = []
             for doc in documents:
                 content = doc.page_content
