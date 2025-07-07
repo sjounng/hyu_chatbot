@@ -1,438 +1,400 @@
 import os
 import json
 import pickle
-import random
-import logging
 from collections import OrderedDict
-from typing import List, Optional, Dict, Any
+from typing import List, Set, Dict, Any, Optional
 from datetime import datetime
 import uuid
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from dotenv import load_dotenv
-from difflib import SequenceMatcher
 from contextlib import asynccontextmanager
 
-# LangChain imports (최신 버전으로 업데이트)
 from langchain_community.vectorstores import Chroma
 from langchain_community.retrievers import BM25Retriever
-from langchain.retrievers import EnsembleRetriever
 from langchain_core.documents import Document
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from sentence_transformers.cross_encoder import CrossEncoder
 
-# CrossEncoder를 위한 import
-ENABLE_CROSSENCODER = os.getenv("ENABLE_CROSSENCODER", "true").lower() == "true"
-
-try:
-    if ENABLE_CROSSENCODER:
-        from sentence_transformers.cross_encoder import CrossEncoder
-        CROSSENCODER_AVAILABLE = True
-    else:
-        CROSSENCODER_AVAILABLE = False
-        logging.info("CrossEncoder가 환경 변수로 비활성화되었습니다.")
-except ImportError:
-    CROSSENCODER_AVAILABLE = False
-    logging.warning("sentence-transformers 패키지가 없습니다. 간단한 키워드 매칭을 사용합니다.")
-
-# 환경 변수 로드
-load_dotenv()
-
-# 로깅 설정
-log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, log_level),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('app.log', encoding='utf-8')
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# API 키 및 설정
-api_key = os.getenv("OPENAI_API_KEY")
-
-# --- 설정 및 문서 로딩 (final.py와 동일한 경로 구조) ---
-DATA_DIR = os.getenv("DATA_DIR", "./data")
-VECTOR_DB_PATH = os.path.join(DATA_DIR, "chroma_db_hyu")
-DOC_FILE_PATH = os.path.join(DATA_DIR, "document.json")
-QA_FILE_PATH = os.path.join(DATA_DIR, "question_sample.json")
-MATCHED_JSON_PATH = os.path.join(DATA_DIR, "matched.json")
-
-# OpenAI API 키 검증
-if not api_key:
-    raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다. .env 파일을 확인해주세요.")
-
-# 전역 변수로 검색 시스템 초기화
-embedding_model = None
-vector_retriever = None
-bm25_retriever = None
-hybrid_retriever = None
-title_to_doc_map = {}
-all_titles = []
-qa_samples = []
-abbrev_map = {}
-cross_encoder_model = None
-
-def initialize_search_system():
-    """검색 시스템을 초기화합니다."""
-    global embedding_model, vector_retriever, bm25_retriever, hybrid_retriever, title_to_doc_map, all_titles, qa_samples, abbrev_map, cross_encoder_model
-    
-    logger.info("1. 검색 시스템 및 전체 문서 데이터를 로드합니다...")
-    
-    # 파일 존재 여부 확인
-    logger.info("파일 존재 여부 확인:")
-    for file_path, name in [
-        (DOC_FILE_PATH, "문서 파일"),
-        (QA_FILE_PATH, "질문 샘플"),
-        (MATCHED_JSON_PATH, "축약어 매핑"),
-        (VECTOR_DB_PATH, "벡터 DB")
-    ]:
-        if os.path.exists(file_path):
-            if os.path.isfile(file_path):
-                size = os.path.getsize(file_path)
-                logger.info(f"   ✓ {name}: 존재 ({size} bytes)")
-            else:
-                logger.info(f"   ✓ {name}: 존재 (디렉토리)")
-        else:
-            logger.info(f"   ✗ {name}: 없음 - {file_path}")
-    
-    try:
-        # 문서 데이터 로딩 (BM25와 벡터 DB 모두에 필요)
-        with open(DOC_FILE_PATH, "r", encoding="utf-8") as f:
-            all_docs_data = json.load(f)
-        
-        title_to_doc_map = {
-            item["title"]: Document(page_content=item["content"], metadata=item)
-            for item in all_docs_data
-        }
-        all_titles = list(title_to_doc_map.keys())
-        
-        # 문서들을 Document 리스트로 변환 (BM25용)
-        documents = [Document(page_content=item["content"], metadata=item) for item in all_docs_data]
-        
-        # 벡터 검색 초기화 시도 (실패하면 런타임 생성)
-        vector_retriever = None
-        try:
-            embedding_model = OpenAIEmbeddings(openai_api_key=api_key)
-            
-            # 기존 벡터 DB가 있으면 사용
-            if os.path.exists(VECTOR_DB_PATH):
-                vector_retriever = Chroma(
-                    persist_directory=VECTOR_DB_PATH, 
-                    embedding_function=embedding_model
-                ).as_retriever(search_kwargs={"k": 20})
-                logger.info("   -> 기존 벡터 DB 로드 완료!")
-            else:
-                # 없으면 런타임에 새로 생성
-                logger.info("   -> 기존 벡터 DB가 없습니다. 런타임에 생성 중...")
-                
-                # documents로부터 벡터 DB 생성
-                vectorstore = Chroma.from_documents(
-                    documents=documents,
-                    embedding=embedding_model,
-                    persist_directory=VECTOR_DB_PATH
-                )
-                vectorstore.persist()  # 디스크에 저장
-                
-                vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 20})
-                logger.info("   -> 새 벡터 DB 생성 및 저장 완료!")
-                
-        except Exception as e:
-            logger.warning(f"   -> 벡터 검색 시스템 로드/생성 실패: {e}")
-            logger.warning("   -> 벡터 검색 없이 진행합니다.")
-        
-        # BM25 인덱스 런타임 생성
-        bm25_retriever = None
-        try:
-            logger.info("   -> BM25 인덱스를 런타임에 생성 중...")
-            bm25_retriever = BM25Retriever.from_documents(documents)
-            bm25_retriever.k = 20
-            logger.info("   -> BM25 인덱스 생성 완료!")
-        except Exception as e:
-            logger.warning(f"   -> BM25 인덱스 생성 실패: {e}")
-            logger.warning("   -> BM25 검색 없이 진행합니다.")
-        
-        # Hybrid retriever 설정 (사용 가능한 것들로만)
-        available_retrievers = []
-        if bm25_retriever:
-            available_retrievers.append(bm25_retriever)
-        if vector_retriever:
-            available_retrievers.append(vector_retriever)
-            
-        if len(available_retrievers) >= 2:
-            hybrid_retriever = EnsembleRetriever(
-                retrievers=available_retrievers, 
-                weights=[0.5, 0.5]
-            )
-        elif len(available_retrievers) == 1:
-            hybrid_retriever = available_retrievers[0]
-        else:
-            hybrid_retriever = None
-            logger.warning("   -> 검색 시스템이 모두 실패했습니다. 골든 티켓만 사용합니다.")
-
-        with open(QA_FILE_PATH, "r", encoding="utf-8") as f:
-            qa_samples = json.load(f)
-        
-        # 축약어 매핑 로딩
-        with open(MATCHED_JSON_PATH, "r", encoding="utf-8") as f:
-            matched_list = json.load(f)
-        abbrev_map = {item["key"]: item["value"] for item in matched_list}
-        
-        # CrossEncoder 로드 시도 (final.py와 동일)
-        if CROSSENCODER_AVAILABLE:
-            try:
-                # final.py와 동일한 모델 사용
-                model_name = "bongsoo/kpf-cross-encoder-v1"
-                logger.info(f"CrossEncoder 모델 로드 중: {model_name}")
-                cross_encoder_model = CrossEncoder(model_name)
-                logger.info("CrossEncoder 모델 로드 완료!")
-            except Exception as e:
-                logger.warning(f"CrossEncoder 모델 로드 실패: {e}. 키워드 매칭을 사용합니다.")
-                cross_encoder_model = None
-        
-        logger.info("   -> 로드 완료!")
-        return True
-        
-    except Exception as e:
-        logger.error(f"   -> 로드 실패: {e}")
-        return False
-
-# 축약어 확장 함수
-def expand_abbreviations(text: str) -> str:
-    """축약어를 확장합니다."""
-    for key, value in abbrev_map.items():
-        if key in text:
-            text = text.replace(key, value)
-    return text
-
-# CrossEncoder 구현 (final.py와 동일)
-def rerank_documents_crossencoder(query: str, documents: List[Document]) -> List[Document]:
-    """CrossEncoder를 사용해 문서들을 재정렬합니다. (final.py와 동일한 구현)"""
-    if not documents or not cross_encoder_model:
-        return rerank_documents_simple(query, documents)
-    
-    logger.info(f"   -> CrossEncoder로 {len(documents)}개 문서 재순위화 진행...")
-    
-    try:
-        # final.py와 완전히 동일한 구현
-        pairs = [[query, doc.page_content] for doc in documents]
-        scores = cross_encoder_model.predict(pairs, show_progress_bar=False)
-        
-        # 점수와 문서 매핑
-        doc_with_scores = list(zip(scores, documents))
-        doc_with_scores.sort(key=lambda x: x[0], reverse=True)
-        reranked_docs = [doc for score, doc in doc_with_scores]
-        
-        logger.info("   -> CrossEncoder 재순위화 완료!")
-        return reranked_docs
-        
-    except Exception as e:
-        logger.warning(f"CrossEncoder 실행 중 오류: {e}. 키워드 매칭으로 대체합니다.")
-        return rerank_documents_simple(query, documents)
-
-# 간단한 문서 재정렬 함수 (fallback)
-def rerank_documents_simple(query: str, documents: List[Document]) -> List[Document]:
-    """간단한 키워드 매칭으로 문서들을 재정렬합니다."""
-    if not documents:
-        return []
-    
-    logger.info(f"   -> 간단한 키워드 매칭으로 {len(documents)}개 문서 재순위화 진행...")
-    
-    # 쿼리를 소문자로 변환하고 단어로 분리
-    query_words = set(query.lower().split())
-    
-    doc_scores = []
-    for doc in documents:
-        # 문서 내용을 소문자로 변환
-        content_lower = doc.page_content.lower()
-        title_lower = doc.metadata.get('title', '').lower()
-        
-        # 키워드 매칭 점수 계산
-        content_matches = sum(1 for word in query_words if word in content_lower)
-        title_matches = sum(2 for word in query_words if word in title_lower)  # 제목 매칭에 더 높은 가중치
-        
-        total_score = content_matches + title_matches
-        doc_scores.append((total_score, doc))
-    
-    # 점수 순으로 정렬
-    doc_scores.sort(key=lambda x: x[0], reverse=True)
-    reranked_docs = [doc for score, doc in doc_scores]
-    
-    logger.info("   -> 재순위화 완료!")
-    return reranked_docs
-
-# Pydantic 모델
+# --- FastAPI 모델 정의 ---
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
 
+class Source(BaseModel):
+    id: str
+    title: str
+    content: str
+
 class ChatResponse(BaseModel):
     response: str
     conversation_id: str
-    timestamp: datetime
-    sources: List[Dict[str, Any]] = []
+    timestamp: str
+    sources: List[Source] = []
 
-# RAG 답변 생성 함수 (CrossEncoder 포함)
-def get_final_response(query: str):
-    """CrossEncoder를 포함한 RAG 로직을 사용합니다."""
+# --- 설정 ---
+# 환경 변수 로드
+env_paths = [
+    ".env", 
+    "o.env",
+    "../.env",
+    os.path.join(os.path.dirname(__file__), ".env"),
+    os.path.join(os.path.dirname(__file__), "o.env")
+]
+
+for env_path in env_paths:
+    if os.path.exists(env_path):
+        load_dotenv(dotenv_path=env_path)
+        print(f"환경 변수 로드: {env_path}")
+        break
+else:
+    load_dotenv()
+    print("시스템 환경 변수 사용")
+
+API_KEY = os.getenv("OPENAI_API_KEY")
+if not API_KEY:
+    raise ValueError("OPENAI_API_KEY 환경 변수가 설정되지 않았습니다.")
+
+CHAT_MODEL = "gpt-4o"
+
+# 데이터 파일 경로 설정
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+VECTOR_DB_PATH = os.path.join(DATA_DIR, "chroma_db_hyu")
+BM25_INDEX_PATH = os.path.join(DATA_DIR, "bm25_index.pkl")
+DOC_FILE_PATH = os.path.join(DATA_DIR, "document.json")
+MATCHED_JSON_PATH = os.path.join(DATA_DIR, "matched.json")
+FEW_SHOT_SAMPLES_PATH = os.path.join(DATA_DIR, "question_sample.json")
+
+# --- 프롬프트 정의 ---
+SYSTEM_PROMPT_GAP_ANALYSIS = """[지시]
+당신은 '정보 분석가'입니다. 주어진 [문서들]을 바탕으로 아래 작업을 수행하세요.
+1. 사용자의 [질문]에 대해 현재까지의 정보로 답변을 생성합니다.
+2. 현재 문서들만으로는 답변이 불완전할 경우, 부족한 정보가 무엇인지 간략히 설명합니다.
+3. 부족한 정보를 보완하기 위해 필요한 '재질문(follow-up query)'을 생성합니다. 정보가 충분하다면 재질문은 빈 문자열로 남겨두세요.
+
+[출력 형식]
+반드시 아래의 JSON 형식에 맞춰서 출력해야 합니다.
+```json
+{{
+  "answer": "...",
+  "missing_info_reason": "...",
+  "follow_up_query": "..."
+}}
+```"""
+
+SYSTEM_PROMPT_FINAL_ANSWER_TEMPLATE = """[지시]
+당신은 주어진 [문서들]의 내용을 종합하여 사용자의 [질문]에 대해 완전하고 상세한 답변을 생성하는 '답변 전문가'입니다.
+- 문서들의 내용을 바탕으로, 논리적이고 이해하기 쉽게 답변을 구성하세요.
+- 추측이 아닌, 제공된 정보에만 근거하여 답변해야 합니다.
+- 아래 [예시]를 참고하여 동일한 스타일과 형식으로 답변을 생성하세요.
+
+{few_shot_examples}
+"""
+
+# --- 전역 변수 ---
+llm = None
+embedding_model = None
+cross_encoder = None
+vector_retriever = None
+bm25_retriever = None
+title_to_doc_map = {}
+all_titles = []
+ABBREV_MAP = {}
+final_answer_system_prompt = ""
+
+def initialize_system():
+    """시스템을 초기화합니다."""
+    global llm, embedding_model, cross_encoder, vector_retriever, bm25_retriever, title_to_doc_map, all_titles, ABBREV_MAP, final_answer_system_prompt
     
-    logger.info(f"\n[전처리] 입력된 질문: {query}")
-    query = expand_abbreviations(query)
-    logger.info(f"[전처리] 확장된 질문: {query}")
+    print("Self-RAG 시스템을 초기화합니다...")
+    
+    # --- 모델 로드 ---
+    llm = ChatOpenAI(model_name=CHAT_MODEL, temperature=0.0, openai_api_key=API_KEY)
+    embedding_model = OpenAIEmbeddings(openai_api_key=API_KEY)
+    
+    try:
+        cross_encoder = CrossEncoder("bongsoo/kpf-cross-encoder-v1")
+        print("CrossEncoder 모델 로드 완료")
+    except Exception as e:
+        print(f"CrossEncoder 로드 실패: {e}")
+        cross_encoder = None
 
-    logger.info("\n[단계 1: 초고속 동시 검색 (원본 쿼리 사용)]")
-    golden_docs = []
-    query_no_space = query.replace(" ", "")
-    for title in all_titles:
-        title_no_space = title.replace(" ", "")
-        if title in query or title_no_space in query_no_space:
-            golden_docs.append(title_to_doc_map[title])
-    if golden_docs:
-        logger.info(
-            f"   -> '골든 티켓' 발견: {[doc.metadata['title'] for doc in golden_docs]}"
+    # --- 데이터 로드 ---
+    # 축약어 매핑 로딩
+    with open(MATCHED_JSON_PATH, "r", encoding="utf-8") as f:
+        ABBREV_MAP = {item["key"]: item["value"] for item in json.load(f)}
+
+    # 벡터 검색 초기화
+    try:
+        # 런타임에서 벡터 DB 생성
+        print("벡터 데이터베이스 생성 중...")
+        with open(DOC_FILE_PATH, "r", encoding="utf-8") as f:
+            all_docs_data = json.load(f)
+        documents = [Document(page_content=item["content"], metadata=item) for item in all_docs_data]
+        
+        # Chroma 벡터스토어 생성
+        vector_store = Chroma.from_documents(
+            documents=documents,
+            embedding=embedding_model,
+            persist_directory=None  # 메모리에만 저장
         )
+        vector_retriever = vector_store.as_retriever(search_kwargs={"k": 50})
+        print("벡터 검색 시스템 생성 완료")
+    except Exception as e:
+        print(f"벡터 검색 시스템 생성 실패: {e}")
+        vector_retriever = None
 
-    # BM25 검색 (사용 가능한 경우에만)
-    bm25_docs = []
+    # BM25 검색 초기화
+    try:
+        if os.path.exists(BM25_INDEX_PATH):
+            with open(BM25_INDEX_PATH, "rb") as f:
+                bm25_retriever = pickle.load(f)
+                bm25_retriever.k = 50
+            print("기존 BM25 인덱스 로드 완료")
+        else:
+            print("BM25 인덱스 생성 중...")
+            with open(DOC_FILE_PATH, "r", encoding="utf-8") as f:
+                all_docs_data = json.load(f)
+            documents = [Document(page_content=item["content"], metadata=item) for item in all_docs_data]
+            bm25_retriever = BM25Retriever.from_documents(documents)
+            bm25_retriever.k = 50
+            
+            with open(BM25_INDEX_PATH, "wb") as f:
+                pickle.dump(bm25_retriever, f)
+            print("BM25 인덱스 생성 및 저장 완료")
+    except Exception as e:
+        print(f"BM25 검색 시스템 초기화 실패: {e}")
+        bm25_retriever = None
+
+    # 문서 데이터 로드
+    with open(DOC_FILE_PATH, "r", encoding="utf-8") as f:
+        all_docs_data = json.load(f)
+        title_to_doc_map = {item["title"]: Document(page_content=item["content"], metadata=item) for item in all_docs_data}
+        all_titles = list(title_to_doc_map.keys())
+
+    # --- Few-shot 예제 로드 및 프롬프트 생성 ---
+    def load_and_format_few_shot_examples(file_path: str, example_ids: List[int]) -> str:
+        """지정된 ID의 few-shot 예제를 로드하고 프롬프트 형식으로 만듭니다."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                samples = json.load(f)
+        except FileNotFoundError:
+            print(f"Warning: Few-shot 샘플 파일 '{file_path}'를 찾을 수 없습니다. Few-shot 프롬프트를 생략합니다.")
+            return ""
+
+        examples_str = ""
+        for sample in samples:
+            if sample["question_id"] in example_ids:
+                example_context = f"문서 제목: {sample['source']['title']}\n내용: {sample['source']['content']}"
+                examples_str += f"""[예시]
+[문서들]
+---
+{example_context}
+---
+
+[질문]
+{sample['question']}
+
+[답변]
+{sample['answer']}
+"""
+        return examples_str
+
+    FEW_SHOT_EXAMPLE_IDS = [3666, 36032] 
+    formatted_few_shot_examples = load_and_format_few_shot_examples(FEW_SHOT_SAMPLES_PATH, FEW_SHOT_EXAMPLE_IDS)
+    final_answer_system_prompt = SYSTEM_PROMPT_FINAL_ANSWER_TEMPLATE.format(
+        few_shot_examples=formatted_few_shot_examples
+    )
+
+    print("Self-RAG 시스템 초기화 완료!")
+
+# --- 헬퍼 함수 ---
+def expand_abbreviations(text: str) -> str:
+    for key, value in ABBREV_MAP.items():
+        text = text.replace(key, value)
+    return text
+
+def rerank_documents(query: str, documents: List[Document], top_k: int = 5) -> List[Document]:
+    if not documents:
+        return []
+    
+    if cross_encoder is not None:
+        try:
+            # CrossEncoder의 최대 입력 길이 제한 (512 토큰 ≈ 2000자)
+            max_content_length = 2000
+            pairs = []
+            for doc in documents:
+                content = doc.page_content
+                # 텍스트가 너무 길면 자르기
+                if len(content) > max_content_length:
+                    content = content[:max_content_length] + "..."
+                pairs.append([query, content])
+            
+            scores = cross_encoder.predict(pairs, show_progress_bar=False)
+            reranked = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
+            return [doc for _, doc in reranked[:top_k]]
+        except Exception as e:
+            print(f"CrossEncoder 사용 중 오류: {e}")
+    
+    # 간단한 키워드 매칭으로 대체
+    query_words = set(query.lower().split())
+    doc_scores = []
+    
+    for doc in documents:
+        content_lower = doc.page_content.lower()
+        title_lower = doc.metadata.get('title', '').lower()
+        
+        content_matches = sum(1 for word in query_words if word in content_lower)
+        title_matches = sum(2 for word in query_words if word in title_lower)
+        
+        total_score = content_matches + title_matches
+        doc_scores.append((total_score, doc))
+    
+    doc_scores.sort(key=lambda x: x[0], reverse=True)
+    return [doc for score, doc in doc_scores[:top_k]]
+
+def rrf_fuse(query: str, excluded_ids: Set[str]) -> List[Document]:
+    golden = [title_to_doc_map[title] for title in all_titles if title in query and title_to_doc_map[title].metadata.get("id", title) not in excluded_ids]
+    
+    bm25 = []
     if bm25_retriever:
         try:
-            bm25_docs = bm25_retriever.invoke(query)
-            logger.info(f"   -> BM25 검색으로 {len(bm25_docs)}개의 후보를 찾았습니다.")
+            bm25 = [doc for doc in bm25_retriever.invoke(query) if doc.metadata.get("id", doc.page_content) not in excluded_ids]
         except Exception as e:
-            logger.warning(f"   -> BM25 검색 실패: {e}")
-    else:
-        logger.info("   -> BM25 검색 건너뜀 (인덱스 없음)")
-
-    # 벡터 검색 (사용 가능한 경우에만)
-    vector_docs = []
+            print(f"BM25 검색 오류: {e}")
+    
+    vector = []
     if vector_retriever:
         try:
-            vector_docs = vector_retriever.invoke(query)
-            logger.info(f"   -> 벡터 검색으로 {len(vector_docs)}개의 후보를 찾았습니다.")
+            vector = [doc for doc in vector_retriever.invoke(query) if doc.metadata.get("id", doc.page_content) not in excluded_ids]
         except Exception as e:
-            logger.warning(f"   -> 벡터 검색 실패: {e}")
-    else:
-        logger.info("   -> 벡터 검색 건너뜀 (시스템 없음)")
+            print(f"벡터 검색 오류: {e}")
+    
+    # 디버깅 정보 출력
+    print(f"    📋 Golden: {len(golden)}개, 🔤 BM25: {len(bm25)}개, 🔍 Vector: {len(vector)}개")
 
-    # 벡터 디버깅 로그
-    logger.info("벡터 디버깅용")
-    if vector_docs:
-        for i, doc in enumerate(vector_docs):
-            logger.info(
-                f"  {i+1}. [출처: {doc.metadata.get('title')}] {doc.page_content[:150]}..."
-            )
-    else:
-        logger.info("  -> vector_docs로 검색된 문서가 없습니다.")
-    logger.info("-" * 20)
-
-    logger.info("\n[단계 2: RRF 융합 및 CrossEncoder 재순위화]")
     rrf_scores = {}
-    all_search_results = [golden_docs, bm25_docs, vector_docs]
-    
-    # 빈 결과들 필터링
-    all_search_results = [results for results in all_search_results if results]
-    
-    if not all_search_results:
-        logger.warning("   -> 모든 검색 결과가 비어있습니다. 기본 답변을 제공합니다.")
-        return "죄송합니다. 관련 정보를 찾을 수 없습니다. 다른 질문을 시도해주세요.", []
-    
-    for results in all_search_results:
+    for results in [golden, bm25, vector]:
         for i, doc in enumerate(results):
             doc_id = doc.metadata.get("id", doc.page_content)
             if doc_id not in rrf_scores:
                 rrf_scores[doc_id] = {"score": 0, "doc": doc}
             rrf_scores[doc_id]["score"] += 1.0 / (i + 60)
 
-    sorted_docs_with_scores = sorted(
-        rrf_scores.values(), key=lambda x: x["score"], reverse=True
-    )
-    fused_docs = [item["doc"] for item in sorted_docs_with_scores][:10]
+    sorted_docs = sorted(rrf_scores.values(), key=lambda x: x["score"], reverse=True)
+    return [item["doc"] for item in sorted_docs[:10]]
 
-    # CrossEncoder 재순위화 (사용 가능하면 CrossEncoder, 아니면 키워드 매칭)
-    final_retrieved_docs = rerank_documents_crossencoder(query, fused_docs)[:5]
-
-    if not final_retrieved_docs:
-        return "관련 정보를 찾을 수 없습니다.", []
-
-    logger.info("\n[최종 선별된 문서 (LLM 전달용)]")
-    for i, doc in enumerate(final_retrieved_docs):
-        logger.info(f"  {i+1}. [출처: {doc.metadata.get('title')}]")
-    logger.info("-" * 20)
-
-    context_str = "\n\n---\n\n".join(
-        [
-            f"문서 제목: {doc.metadata.get('title')}\n내용: {doc.page_content}"
-            for doc in final_retrieved_docs
-        ]
-    )
-    source_info = [doc.metadata for doc in final_retrieved_docs]
-
-    rag_prompt = f"""[지시]
-당신은 주어진 [검색된 문서 내용]에서 사용자의 [질문]과 관련된 정보를 정확하게 찾아내어 요약하는 '정보 분석가'입니다.
-
-[규칙]
-1.  **반드시** [검색된 문서 내용]에 명시된 정보만을 사용하여 답변해야 합니다.
-2.  절대로 문서에 없는 내용을 추론, 가정, 또는 보충하여 설명하지 마세요.
-3.  답변은 [질문]에 대한 핵심 내용을 간결하게 요약하고, 관련된 내용을 직접 인용하는 형태로 구성하세요.
-4.  [질문] 내에 설명이라는 문구가 들어간 경우, 그 [질문]에서 설명을 원하는 대상에 대한 구체적인 설명을 답변에 포함하세요.
-5.  정보에 대한 구체적인 출처는 명시하지 마세요.
-6.  답변에 "[", "]" 두 기호는 사용하지 마세요.
-
----
-[검색된 문서 내용]
+# --- LLM 호출 함수 ---
+def generate_initial_response_and_followup(query: str, docs: List[Document]) -> Dict[str, Any]:
+    context_str = "\n\n---\n\n".join([f"문서 제목: {doc.metadata.get('title')}\n내용: {doc.page_content}" for doc in docs])
+    human_prompt = f"""[문서들]
 {context_str}
----
+
+[질문]
+{query}"""
+    messages = [SystemMessage(content=SYSTEM_PROMPT_GAP_ANALYSIS), HumanMessage(content=human_prompt)]
+    try:
+        response_content = llm.invoke(messages).content.strip()
+        json_part = response_content[response_content.find('{'):response_content.rfind('}')+1]
+        return json.loads(json_part)
+    except Exception as e:
+        print(f"초기 응답 생성 중 오류 발생: {e}")
+        return {"answer": "답변 생성 실패", "missing_info_reason": "", "follow_up_query": ""}
+
+def generate_final_answer(query: str, docs: List[Document]) -> str:
+    context_str = "\n\n---\n\n".join([f"문서 제목: {doc.metadata.get('title')}\n내용: {doc.page_content}" for doc in docs])
+    human_prompt = f"""[문서들]
+{context_str}
+
 [질문]
 {query}
-[답변]"""
 
-    logger.info(f"\n[단계 3: gpt-4o 모델로 사실 기반 답변 생성 (temperature=0.0)]")
+[답변]
+"""
+    messages = [SystemMessage(content=final_answer_system_prompt), HumanMessage(content=human_prompt)]
     try:
-        llm_final = ChatOpenAI(model_name="gpt-4o", temperature=0.0, openai_api_key=api_key)
-        answer = llm_final.invoke(rag_prompt).content.strip()
-        
-        verification_prompt = f"""[지시]
-아래 [생성된 답변]의 모든 문장이 [원본 문서]에 근거하고 있는지 검증하세요.
-근거가 없는 문장이나 추론이 포함된 문장은 삭제하거나, [원본 문서]의 표현으로 수정하여 최종 답변을 만드세요.
-
-[원본 문서]
-{context_str}
----
-[생성된 답변]
-{answer}
----
-[검증 완료된 최종 답변]"""
-        
-        logger.info("\n[단계 4: 생성된 답변에 대한 자체 검증 수행]")
-        verified_answer = llm_final.invoke(verification_prompt).content.strip()
-        
-        return verified_answer, source_info
+        response = llm.invoke(messages)
+        return response.content.strip()
     except Exception as e:
-        return f"답변 생성 중 오류 발생: {e}", []
+        print(f"최종 답변 생성 중 오류 발생: {e}")
+        return "최종 답변 생성에 실패했습니다."
 
+# --- Self-RAG 메인 로직 ---
+def process_self_rag_query(user_query: str) -> tuple[str, List[Document]]:
+    """Self-RAG 시스템을 사용하여 쿼리를 처리합니다."""
+    
+    # 송우정 특별 처리
+    SONG_WOO_JEONG_ANSWER = """송우정은 한양대학교 정보시스템학과 22학번입니다. 학과 구성원이라면 누구나 한 번쯤 그 이름을 들어봤을 정도로, 그는 정보시스템학과를 대표하는 인물로 손꼽힙니다.
+학부 시절부터 두각을 드러낸 그는, 문제 해결 능력과 깊이 있는 사고력으로 주목받았습니다. 특히 알고리즘 실력은 타의 추종을 불허할 정도로 탁월했으며, 백준 온라인 저지에서는 다이아몬드 티어에 도달하며 실력을 객관적으로 증명해냈습니다. 이는 단순한 코딩 실력을 넘어, 논리적 사고와 집중력, 꾸준한 자기 주도 학습이 뒷받침된 결과였습니다.
+그의 성장 여정은 한양대학교를 넘어 서울대학교 데이터사이언스 대학원으로 이어졌습니다. 학문적 탐구를 멈추지 않고 더 넓은 세계로 나아가는 모습은, 후배들에게 귀감이 되고 있습니다. 특히 정보시스템학과 후배들 사이에서는 '본받고 싶은 선배'로 자주 언급되며, 학과의 긍정적인 전통을 이어가는 데 큰 영향을 미치고 있습니다.
+송우정은 뛰어난 실력만으로 평가받는 인물이 아닙니다. 항상 겸손한 태도로 주변을 대하고, 자신이 배운 지식을 아낌없이 나누며 함께 성장하는 문화를 만들어가는 사람입니다.
+정보시스템학과가 자랑스러워할 수 있는 한 이름, 그리고 후배들에게 좋은 길잡이가 되어주는 한 선배. 그가 바로, 송우정입니다."""
+
+    if "송우정" in user_query:
+        return SONG_WOO_JEONG_ANSWER, []
+
+    expanded_query = expand_abbreviations(user_query)
+    
+    # 1차 검색
+    initial_docs = rrf_fuse(expanded_query, excluded_ids=set())
+    top_docs = rerank_documents(user_query, initial_docs, top_k=5)
+
+    print(f"\n[🔍 1차 검색 결과] - {len(top_docs)}개 문서")
+    for i, doc in enumerate(top_docs):
+        print(f"  {i+1}. {doc.metadata.get('title')}")
+
+    if not top_docs:
+        return "관련된 문서를 찾지 못했습니다.", []
+
+    # 1차 답변 및 재질의 생성
+    result = generate_initial_response_and_followup(user_query, top_docs)
+    print(f"\n[✅ 1차 답변] {result.get('answer', '(없음)')[:100]}...")
+
+    initial_answer = result.get("answer", "(없음)")
+    follow_up_query = result.get("follow_up_query")
+    
+    # 재질문이 필요 없는 경우
+    if not follow_up_query or not follow_up_query.strip():
+        print("\n[📌 추가 검색 불필요. 1차 답변으로 충분합니다.]")
+        return initial_answer, top_docs
+
+    # 2차 검색 수행
+    print(f"\n[🔁 재질의 생성됨 → '{follow_up_query}']")
+
+    excluded_ids = {doc.metadata.get("id", doc.page_content) for doc in top_docs}
+    new_docs = rrf_fuse(follow_up_query, excluded_ids=excluded_ids)
+    new_top_docs = rerank_documents(follow_up_query, new_docs, top_k=5)
+
+    print(f"\n[🔍 2차 검색 결과] - {len(new_top_docs)}개 문서")
+    for i, doc in enumerate(new_top_docs):
+        print(f"  {i+1}. {doc.metadata.get('title')}")
+
+    # 최종 문서 통합
+    merged_docs = rerank_documents(user_query, top_docs + new_top_docs, top_k=5)
+    print(f"\n[📚 최종 문서 선택] - {len(merged_docs)}개 문서")
+    for i, doc in enumerate(merged_docs):
+        print(f"  {i+1}. {doc.metadata.get('title')}")
+
+    if merged_docs:
+        # 2차 검색까지 마친 후에만 few-shot 프롬프트가 포함된 최종 답변 생성 함수를 호출
+        final_answer = generate_final_answer(user_query, merged_docs)
+        return final_answer, merged_docs
+    else:
+        # 1차 답변은 있었지만, 2차 검색 결과가 없어 최종 문서를 못 고른 경우
+        return initial_answer, top_docs
+
+# --- FastAPI 설정 ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI 서버 시작 시 검색 시스템을 초기화합니다."""
-    logger.info("서버 시작 시 검색 시스템 초기화...")
-    success = initialize_search_system()
-    if not success:
-        logger.error("검색 시스템 초기화 실패")
-        raise RuntimeError("검색 시스템 초기화 실패")
+    """FastAPI 서버 시작 시 Self-RAG 시스템을 초기화합니다."""
+    initialize_system()
     yield
-    logger.info("서버 종료...")
 
-# FastAPI 앱 설정
-app = FastAPI(
-    title="한양대학교 AI 챗봇 API",
-    description="한양대학교 정보를 검색하고 답변하는 AI 챗봇",
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="Self-RAG ChatBot API", version="1.0.0", lifespan=lifespan)
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -441,53 +403,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- API 엔드포인트 ---
 @app.get("/")
 async def root():
-    """루트 엔드포인트"""
-    return {
-        "message": "한양대학교 AI 챗봇 API",
-        "version": "1.0.0",
-        "status": "running"
-    }
+    return {"message": "Self-RAG ChatBot API is running"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
 
 @app.post("/api/v1/chat/", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """채팅 API 엔드포인트"""
     try:
-        logger.info(f"사용자 질문: {request.message}")
+        if not request.message.strip():
+            raise HTTPException(status_code=400, detail="메시지가 비어있습니다.")
         
-        # 특별 처리: 송우정에 대한 질문
-        if "송우정" in request.message:
-            special_response = "송우정은 한양대학교 정보시스템학과 22학번입니다. 학과 구성원이라면 누구나 한 번쯤 그 이름을 들어봤을 정도로, 그는 정보시스템학과를 대표하는 인물로 손꼽힙니다.\n학부 시절부터 두각을 드러낸 그는, 문제 해결 능력과 깊이 있는 사고력으로 주목받았습니다. 특히 알고리즘 실력은 타의 추종을 불허할 정도로 탁월했으며, 백준 온라인 저지에서는 다이아몬드 티어에 도달하며 실력을 객관적으로 증명해냈습니다. 이는 단순한 코딩 실력을 넘어, 논리적 사고와 집중력, 꾸준한 자기 주도 학습이 뒷받침된 결과였습니다.\n그의 성장 여정은 한양대학교를 넘어 서울대학교 데이터사이언스 대학원으로 이어졌습니다. 학문적 탐구를 멈추지 않고 더 넓은 세계로 나아가는 모습은, 후배들에게 귀감이 되고 있습니다. 특히 정보시스템학과 후배들 사이에서는 '본받고 싶은 선배'로 자주 언급되며, 학과의 긍정적인 전통을 이어가는 데 큰 영향을 미치고 있습니다.\n송우정은 뛰어난 실력만으로 평가받는 인물이 아닙니다. 항상 겸손한 태도로 주변을 대하고, 자신이 배운 지식을 아낌없이 나누며 함께 성장하는 문화를 만들어가는 사람입니다.\n정보시스템학과가 자랑스러워할 수 있는 한 이름, 그리고 후배들에게 좋은 길잡이가 되어주는 한 선배. 그가 바로, 송우정입니다."
-            
-            return ChatResponse(
-                response=special_response,
-                conversation_id=request.conversation_id or str(uuid.uuid4()),
-                timestamp=datetime.now(),
-                sources=[]
-            )
+        # Self-RAG로 답변 생성
+        final_answer, used_docs = process_self_rag_query(request.message)
         
-        # RAG 시스템을 통한 답변 생성
-        answer, sources = get_final_response(request.message)
+        # 소스 문서 정보 생성
+        sources = []
+        for doc in used_docs:
+            sources.append(Source(
+                id=str(doc.metadata.get("id", hash(doc.page_content))),
+                title=doc.metadata.get("title", "제목 없음"),
+                content=doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content
+            ))
+        
+        conversation_id = request.conversation_id or str(uuid.uuid4())
         
         return ChatResponse(
-            response=answer,
-            conversation_id=request.conversation_id or str(uuid.uuid4()),
-            timestamp=datetime.now(),
+            response=final_answer,
+            conversation_id=conversation_id,
+            timestamp=datetime.now().isoformat(),
             sources=sources
         )
         
     except Exception as e:
-        logger.error(f"Chat API 오류: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-async def health_check():
-    """헬스 체크 엔드포인트"""
-    return {"status": "healthy", "timestamp": datetime.now()}
+        print(f"API 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"서버 오류가 발생했습니다: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
     
